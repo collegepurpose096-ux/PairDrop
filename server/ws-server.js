@@ -14,19 +14,20 @@ export default class PairDropWsServer {
         this._roomSecrets = {}; // { pairKey: roomSecret }
         this._keepAliveTimers = {};
 
-        // ULTRA FAST MODE: Optimize WebSocket settings
+        // WebSocket settings
         this._wss = new WebSocketServer({ 
             server,
-            // Increase performance settings
-            perMessageDeflate: false, // Disable compression for speed
-            maxPayload: 100 * 1024 * 1024, // 100MB max payload
-            backlog: 1024, // Increase connection backlog
+            perMessageDeflate: false,
+            maxPayload: 100 * 1024 * 1024,
+            backlog: 1024,
         });
         
+        console.log("✓ WebSocket Server initialized on port", conf.port);
+        
         this._wss.on('connection', (socket, request) => {
-            // ULTRA FAST MODE: Optimize socket settings
+            console.log("\n🔌 New connection attempt from:", request.socket.remoteAddress);
+            
             socket.binaryType = 'nodebuffer';
-            // Disable Nagle's algorithm for lower latency
             if (socket._socket) {
                 socket._socket.setNoDelay(true);
                 socket._socket.setKeepAlive(true, 1000);
@@ -34,13 +35,43 @@ export default class PairDropWsServer {
             
             this._onConnection(new Peer(socket, request, conf));
         });
+
+        this._wss.on('error', (error) => {
+            console.error("❌ WebSocket Server Error:", error);
+        });
+
+        // Log active connections every 10 seconds
+        setInterval(() => {
+            const totalPeers = Object.values(this._rooms).reduce((sum, room) => sum + Object.keys(room).length, 0);
+            const roomCount = Object.keys(this._rooms).length;
+            console.log(`📊 Status: ${totalPeers} peers in ${roomCount} rooms`);
+            
+            if (this._conf.debugMode) {
+                console.log("Active rooms:", Object.keys(this._rooms));
+                for (const roomId in this._rooms) {
+                    console.log(`  Room ${roomId}:`, Object.keys(this._rooms[roomId]).length, "peers");
+                }
+            }
+        }, 10000);
     }
 
     _onConnection(peer) {
-        peer.socket.on('message', message => this._onMessage(peer, message));
-        peer.socket.onerror = e => console.error(e);
+        console.log("✓ Peer connected:", {
+            id: peer.id,
+            ip: peer.ip,
+            name: peer.name.deviceName,
+            displayName: peer.name.displayName
+        });
 
-        // ULTRA FAST MODE: Reduce keep-alive interval
+        peer.socket.on('message', message => this._onMessage(peer, message));
+        peer.socket.on('close', () => {
+            console.log("🔌 Peer disconnected:", peer.id);
+            this._onDisconnect(peer);
+        });
+        peer.socket.onerror = e => {
+            console.error("❌ Socket error for peer", peer.id, ":", e);
+        };
+
         this._keepAlive(peer);
 
         this._send(peer, {
@@ -48,19 +79,14 @@ export default class PairDropWsServer {
             wsConfig: {
                 rtcConfig: {
                     ...this._conf.rtcConfig,
-                    // ULTRA FAST MODE: Force UDP-like settings
                     iceTransportPolicy: 'all',
                     bundlePolicy: 'max-bundle',
                     rtcpMuxPolicy: 'require',
-                    // Optimize for speed over reliability
                     iceCandidatePoolSize: 10,
                 },
                 wsFallback: this._conf.wsFallback,
-                // ULTRA FAST MODE: Custom chunk size (10MB for local network)
-                chunkSize: 10 * 1024 * 1024, // 10MB chunks
-                // Maximum parallel transfers
+                chunkSize: 10 * 1024 * 1024,
                 maxParallelTransfers: 8,
-                // Disable artificial delays
                 disableThrottling: true
             }
         });
@@ -73,12 +99,13 @@ export default class PairDropWsServer {
             peerId: peer.id,
             peerIdHash: hasher.hashCodeSalted(peer.id)
         });
+
+        console.log("✓ Sent initial config to peer:", peer.id);
     }
 
     _onMessage(sender, message) {
-        // ULTRA FAST MODE: Handle binary messages directly without parsing
+        // Handle binary messages directly
         if (message instanceof Buffer) {
-            // Fast path for binary data - relay directly
             this._relayBinaryMessage(sender, message);
             return;
         }
@@ -87,8 +114,13 @@ export default class PairDropWsServer {
         try {
             message = JSON.parse(message);
         } catch (e) {
-            console.warn("WS: Received JSON is malformed");
+            console.warn("⚠️  WS: Received JSON is malformed from peer", sender.id);
             return;
+        }
+
+        // Log important messages
+        if (['join-ip-room', 'join-public-room', 'create-public-room', 'pair-device-initiate'].includes(message.type)) {
+            console.log(`📨 Received ${message.type} from peer ${sender.id}`);
         }
 
         switch (message.type) {
@@ -99,6 +131,7 @@ export default class PairDropWsServer {
                 this._setKeepAliveTimerToNow(sender);
                 break;
             case 'join-ip-room':
+                console.log(`🏠 Peer ${sender.id} joining IP room: ${sender.ip}`);
                 this._joinIpRoom(sender);
                 break;
             case 'room-secrets':
@@ -142,31 +175,32 @@ export default class PairDropWsServer {
             case 'text':
             case 'display-name-changed':
             case 'ws-chunk':
-            case 'ws-chunk-binary': // ULTRA FAST MODE: New binary chunk type
-                // relay ws-fallback
+            case 'ws-chunk-binary':
                 if (this._conf.wsFallback) {
                     this._signalAndRelay(sender, message);
                 }
                 else {
-                    console.log("Websocket fallback is not activated on this instance.")
+                    console.log("⚠️  Websocket fallback is not activated on this instance.")
+                }
+                break;
+            default:
+                if (this._conf.debugMode) {
+                    console.log(`📨 Unhandled message type: ${message.type}`);
                 }
         }
     }
 
-    // ULTRA FAST MODE: Direct binary message relay
     _relayBinaryMessage(sender, binaryData) {
         if (!this._conf.wsFallback) return;
         
-        // Extract recipient ID from first 36 bytes (UUID)
         const recipientId = binaryData.slice(0, 36).toString('utf8');
-        const roomType = binaryData.slice(36, 37).toString('utf8'); // 'i' for ip, 's' for secret
+        const roomType = binaryData.slice(36, 37).toString('utf8');
         
         const room = roomType === 'i' ? sender.ip : binaryData.slice(37, 101).toString('utf8').trim();
         
         if (Peer.isValidUuid(recipientId) && this._rooms[room]) {
             const recipient = this._rooms[room][recipientId];
             if (recipient && recipient.socket.readyState === 1) {
-                // Direct binary send - fastest possible
                 recipient.socket.send(binaryData.slice(101), { binary: true });
             }
         }
@@ -177,16 +211,21 @@ export default class PairDropWsServer {
             ? sender.ip
             : message.roomId;
 
-        // relay message to recipient
         if (message.to && Peer.isValidUuid(message.to) && this._rooms[room]) {
             const recipient = this._rooms[room][message.to];
+            if (!recipient) {
+                console.warn(`⚠️  Recipient ${message.to} not found in room ${room}`);
+                return;
+            }
+            
             delete message.to;
-            // add sender
             message.sender = {
                 id: sender.id,
                 rtcSupported: sender.rtcSupported
             };
             this._send(recipient, message);
+        } else if (!this._rooms[room]) {
+            console.warn(`⚠️  Room ${room} does not exist for signal relay`);
         }
     }
 
@@ -205,7 +244,9 @@ export default class PairDropWsServer {
         this._leaveAllSecretRooms(sender, true);
         this._leavePublicRoom(sender, true);
 
-        sender.socket.terminate();
+        if (sender.socket.readyState === 1) {
+            sender.socket.terminate();
+        }
     }
 
     _onRoomSecrets(sender, message) {
@@ -215,8 +256,9 @@ export default class PairDropWsServer {
             return /^[\x00-\x7F]{64,256}$/.test(roomSecret);
         })
 
-        if (!roomSecrets) return;
+        if (!roomSecrets || roomSecrets.length === 0) return;
 
+        console.log(`🔐 Peer ${sender.id} joining ${roomSecrets.length} secret room(s)`);
         this._joinSecretRooms(sender, roomSecrets);
     }
 
@@ -229,6 +271,8 @@ export default class PairDropWsServer {
     _deleteSecretRoom(roomSecret) {
         const room = this._rooms[roomSecret];
         if (!room) return;
+
+        console.log(`🗑️  Deleting secret room with ${Object.keys(room).length} peers`);
 
         for (const peerId in room) {
             const peer = room[peerId];
@@ -251,6 +295,8 @@ export default class PairDropWsServer {
         }
         sender.pairKey = pairKey;
 
+        console.log(`🔗 Pair key created: ${pairKey} for peer ${sender.id}`);
+
         this._send(sender, {
             type: 'pair-device-initiated',
             roomSecret: roomSecret,
@@ -266,6 +312,7 @@ export default class PairDropWsServer {
         }
 
         if (!this._roomSecrets[message.pairKey] || sender.id === this._roomSecrets[message.pairKey].creator.id) {
+            console.log(`❌ Invalid pair key: ${message.pairKey}`);
             this._send(sender, { type: 'pair-device-join-key-invalid' });
             return;
         }
@@ -273,6 +320,9 @@ export default class PairDropWsServer {
         const roomSecret = this._roomSecrets[message.pairKey].roomSecret;
         const creator = this._roomSecrets[message.pairKey].creator;
         this._removePairKey(message.pairKey);
+        
+        console.log(`✓ Pair successful: ${sender.id} joined ${creator.id}`);
+        
         this._send(sender, {
             type: 'pair-device-joined',
             roomSecret: roomSecret,
@@ -302,6 +352,8 @@ export default class PairDropWsServer {
     _onCreatePublicRoom(sender) {
         let publicRoomId = randomizer.getRandomString(5, true).toLowerCase();
 
+        console.log(`🌐 Public room created: ${publicRoomId} by peer ${sender.id}`);
+
         this._send(sender, {
             type: 'public-room-created',
             roomId: publicRoomId
@@ -317,6 +369,7 @@ export default class PairDropWsServer {
         }
 
         if (!this._rooms[message.publicRoomId] && !message.createIfInvalid) {
+            console.log(`❌ Invalid public room ID: ${message.publicRoomId}`);
             this._send(sender, { type: 'public-room-id-invalid', publicRoomId: message.publicRoomId });
             return;
         }
@@ -334,7 +387,6 @@ export default class PairDropWsServer {
         const oldRoomSecret = message.roomSecret;
         const newRoomSecret = randomizer.getRandomString(256);
 
-        // notify all other peers
         for (const peerId in this._rooms[oldRoomSecret]) {
             const peer = this._rooms[oldRoomSecret][peerId];
             this._send(peer, {
@@ -350,8 +402,7 @@ export default class PairDropWsServer {
     _createPairKey(creator, roomSecret) {
         let pairKey;
         do {
-            // get randomInt until keyRoom not occupied
-            pairKey = crypto.randomInt(1000000, 1999999).toString().substring(1); // include numbers with leading 0s
+            pairKey = crypto.randomInt(1000000, 1999999).toString().substring(1);
         } while (pairKey in this._roomSecrets)
 
         this._roomSecrets[pairKey] = {
@@ -375,38 +426,32 @@ export default class PairDropWsServer {
 
     _joinSecretRoom(peer, roomSecret) {
         this._joinRoom(peer, 'secret', roomSecret);
-
-        // add secret to peer
         peer.addRoomSecret(roomSecret);
     }
 
     _joinPublicRoom(peer, publicRoomId) {
-        // prevent joining of 2 public rooms simultaneously
         this._leavePublicRoom(peer);
-
         this._joinRoom(peer, 'public-id', publicRoomId);
-
         peer.publicRoomId = publicRoomId;
     }
 
     _joinRoom(peer, roomType, roomId) {
-        // roomType: 'ip', 'secret' or 'public-id'
         if (this._rooms[roomId] && this._rooms[roomId][peer.id]) {
-            // ensures that otherPeers never receive `peer-left` after `peer-joined` on reconnect.
             this._leaveRoom(peer, roomType, roomId);
         }
 
-        // if room doesn't exist, create it
         if (!this._rooms[roomId]) {
             this._rooms[roomId] = {};
+            console.log(`🏠 Created new room: ${roomId} (type: ${roomType})`);
         }
 
         this._notifyPeers(peer, roomType, roomId);
 
-        // add peer to room
         this._rooms[roomId][peer.id] = peer;
+        
+        const peerCount = Object.keys(this._rooms[roomId]).length;
+        console.log(`✓ Peer ${peer.id} joined room ${roomId} (${peerCount} peer${peerCount !== 1 ? 's' : ''} total)`);
     }
-
 
     _leaveIpRoom(peer, disconnect = false) {
         this._leaveRoom(peer, 'ip', peer.ip, disconnect);
@@ -414,32 +459,26 @@ export default class PairDropWsServer {
 
     _leaveSecretRoom(peer, roomSecret, disconnect = false) {
         this._leaveRoom(peer, 'secret', roomSecret, disconnect)
-
-        //remove secret from peer
         peer.removeRoomSecret(roomSecret);
     }
 
     _leavePublicRoom(peer, disconnect = false) {
         if (!peer.publicRoomId) return;
-
         this._leaveRoom(peer, 'public-id', peer.publicRoomId, disconnect);
-
         peer.publicRoomId = null;
     }
 
     _leaveRoom(peer, roomType, roomId, disconnect = false) {
         if (!this._rooms[roomId] || !this._rooms[roomId][peer.id]) return;
 
-        // remove peer from room
         delete this._rooms[roomId][peer.id];
 
-        // delete room if empty and abort
         if (!Object.keys(this._rooms[roomId]).length) {
             delete this._rooms[roomId];
+            console.log(`🗑️  Deleted empty room: ${roomId}`);
             return;
         }
 
-        // notify all other peers that remain in room that peer left
         for (const otherPeerId in this._rooms[roomId]) {
             const otherPeer = this._rooms[roomId][otherPeerId];
 
@@ -471,6 +510,7 @@ export default class PairDropWsServer {
             };
 
             this._send(otherPeer, msg);
+            console.log(`📢 Notified peer ${otherPeerId} about new peer ${peer.id} in room ${roomId}`);
         }
 
         // notify peer about peers already in the room
@@ -488,6 +528,10 @@ export default class PairDropWsServer {
         };
 
         this._send(peer, msg);
+        
+        if (otherPeers.length > 0) {
+            console.log(`📢 Sent ${otherPeers.length} existing peer(s) to new peer ${peer.id}`);
+        }
     }
 
     _joinSecretRooms(peer, roomSecrets) {
@@ -504,16 +548,23 @@ export default class PairDropWsServer {
 
     _send(peer, message) {
         if (!peer) return;
-        if (this._wss.readyState !== this._wss.OPEN) return;
+        if (peer.socket.readyState !== 1) {
+            console.warn(`⚠️  Cannot send to peer ${peer.id}, socket state: ${peer.socket.readyState}`);
+            return;
+        }
+        
         message = JSON.stringify(message);
-        // ULTRA FAST MODE: Send without waiting
-        peer.socket.send(message, { compress: false });
+        
+        try {
+            peer.socket.send(message, { compress: false });
+        } catch (error) {
+            console.error(`❌ Error sending to peer ${peer.id}:`, error.message);
+        }
     }
 
     _keepAlive(peer) {
         this._cancelKeepAlive(peer);
-        // ULTRA FAST MODE: Reduced keep-alive timeout for faster detection
-        let timeout = 2000; // Reduced from 1000ms to 2000ms for less overhead
+        let timeout = 2000;
 
         if (!this._keepAliveTimers[peer.id]) {
             this._keepAliveTimers[peer.id] = {
@@ -522,8 +573,8 @@ export default class PairDropWsServer {
             };
         }
 
-        // ULTRA FAST MODE: More aggressive timeout (4 seconds instead of 10)
-        if (Date.now() - this._keepAliveTimers[peer.id].lastBeat > 2 * timeout) {
+        if (Date.now() - this._keepAliveTimers[peer.id].lastBeat > 3 * timeout) {
+            console.log(`💔 Peer ${peer.id} unresponsive, disconnecting`);
             this._disconnect(peer);
             return;
         }
