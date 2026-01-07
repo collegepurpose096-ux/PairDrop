@@ -1235,7 +1235,7 @@ class PeersManager {
 class FileChunker {
 
     constructor(file, onChunk, onPartitionEnd) {
-        this._chunkSize = 256 * 1024; // 64 KB
+        this._chunkSize = 512 * 1024; // 64 KB
         this._maxPartitionSize = 5 * 1024 * 1024; // 1 MB
         this._offset = 0;
         this._partitionSize = 0;
