@@ -37,7 +37,7 @@ conf.debugMode = process.env.DEBUG_MODE === "true";
 
 conf.port = process.env.PORT || 3000;
 
-conf.wsFallback = process.argv.includes('--include-ws-fallback') || process.env.WS_FALLBACK === "true";
+conf.wsFallback = false
 
 conf.rtcConfig = process.env.RTC_CONFIG && process.env.RTC_CONFIG !== "false"
     ? JSON.parse(fs.readFileSync(process.env.RTC_CONFIG, 'utf8'))
