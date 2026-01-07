@@ -629,7 +629,7 @@ class Peer {
         this._onDownloadProgress(progress);
 
         // occasionally notify sender about our progress
-        if (progress - this._lastProgress < 0.005 && progress !== 1) return;
+        if (progress - this._lastProgress < 0.05) return;
         this._lastProgress = progress;
         this._sendProgress(progress);
     }
