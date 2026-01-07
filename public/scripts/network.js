@@ -1235,8 +1235,12 @@ class PeersManager {
 class FileChunker {
 
     constructor(file, onChunk, onPartitionEnd) {
-        this._chunkSize = 64000; // 64 KB
-        this._maxPartitionSize = 1e6; // 1 MB
+        // CHANGED: Increased from 64KB to 10MB for ultra-fast transfers
+        this._chunkSize = 10 * 1024 * 1024; // 10 MB (was 64000 = 64 KB)
+        
+        // CHANGED: Increased from 1MB to 50MB partition size
+        this._maxPartitionSize = 50 * 1024 * 1024; // 50 MB (was 1e6 = 1 MB)
+        
         this._offset = 0;
         this._partitionSize = 0;
         this._file = file;
@@ -1281,7 +1285,6 @@ class FileChunker {
         return this._offset >= this._file.size;
     }
 }
-
 class FileDigester {
 
     constructor(meta, totalSize, totalBytesReceived, callback) {
