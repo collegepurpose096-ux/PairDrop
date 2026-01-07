@@ -1,21 +1,22 @@
-FROM alpine:latest
+FROM node:20-alpine
 
 WORKDIR /home/node/app
 
+# Install wget for healthcheck
+RUN apk add --no-cache wget
+
 COPY package*.json ./
+RUN npm ci --omit=dev
 
-RUN apk add --no-cache nodejs npm
-RUN NODE_ENV="production" npm ci --omit=dev
-
-# Directories and files excluded via .dockerignore
 COPY . .
 
-# environment settings
-ENV NODE_ENV="production"
+ENV NODE_ENV=production
+ENV WS_FALLBACK=false
+ENV RTC_CONFIG='{"sdpSemantics":"unified-plan","iceServers":[]}'
 
 EXPOSE 3000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD wget --quiet --tries=1 --spider http://localhost:3000 || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD wget --quiet --tries=1 --spider http://127.0.0.1:3000 || exit 1
 
-ENTRYPOINT ["npm", "start"]
+CMD ["npm", "start"]
