@@ -37,19 +37,13 @@ conf.debugMode = process.env.DEBUG_MODE === "true";
 
 conf.port = process.env.PORT || 3000;
 
-conf.wsFallback = true
+conf.wsFallback = false
 
-conf.rtcConfig = process.env.RTC_CONFIG && process.env.RTC_CONFIG !== "false"
-    ? JSON.parse(fs.readFileSync(process.env.RTC_CONFIG, 'utf8'))
-    : {
-        "sdpSemantics": "unified-plan",
-        "iceServers": [
-            {
-                "urls": "stun:stun.l.google.com:19302"
-            }
-        ]
-    };
 
+conf.rtcConfig = {
+    sdpSemantics: "unified-plan",
+    iceServers: []   // 🚀 LAN only, no STUN
+};
 
 conf.signalingServer = process.env.SIGNALING_SERVER && process.env.SIGNALING_SERVER !== "false"
     ? process.env.SIGNALING_SERVER
