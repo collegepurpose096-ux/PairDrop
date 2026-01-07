@@ -755,7 +755,7 @@ class RTCPeer extends Peer {
 
         const channel = this._conn.createDataChannel('data-channel', {
             ordered: true,
-            reliable: true // Obsolete. See https://developer.mozilla.org/en-US/docs/Web/API/RTCDataChannel/reliable
+            maxPacketLifeTime: 50 // Obsolete. See https://developer.mozilla.org/en-US/docs/Web/API/RTCDataChannel/reliable
         });
         channel.onopen = e => this._onChannelOpened(e);
         channel.onerror = e => this._onError(e);
