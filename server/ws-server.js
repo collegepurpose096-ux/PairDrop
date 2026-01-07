@@ -14,21 +14,54 @@ export default class PairDropWsServer {
         this._roomSecrets = {}; // { pairKey: roomSecret }
         this._keepAliveTimers = {};
 
-        this._wss = new WebSocketServer({ server });
-        this._wss.on('connection', (socket, request) => this._onConnection(new Peer(socket, request, conf)));
+        // ULTRA FAST MODE: Optimize WebSocket settings
+        this._wss = new WebSocketServer({ 
+            server,
+            // Increase performance settings
+            perMessageDeflate: false, // Disable compression for speed
+            maxPayload: 100 * 1024 * 1024, // 100MB max payload
+            backlog: 1024, // Increase connection backlog
+        });
+        
+        this._wss.on('connection', (socket, request) => {
+            // ULTRA FAST MODE: Optimize socket settings
+            socket.binaryType = 'nodebuffer';
+            // Disable Nagle's algorithm for lower latency
+            if (socket._socket) {
+                socket._socket.setNoDelay(true);
+                socket._socket.setKeepAlive(true, 1000);
+            }
+            
+            this._onConnection(new Peer(socket, request, conf));
+        });
     }
 
     _onConnection(peer) {
         peer.socket.on('message', message => this._onMessage(peer, message));
         peer.socket.onerror = e => console.error(e);
 
+        // ULTRA FAST MODE: Reduce keep-alive interval
         this._keepAlive(peer);
 
         this._send(peer, {
             type: 'ws-config',
             wsConfig: {
-                rtcConfig: this._conf.rtcConfig,
-                wsFallback: this._conf.wsFallback
+                rtcConfig: {
+                    ...this._conf.rtcConfig,
+                    // ULTRA FAST MODE: Force UDP-like settings
+                    iceTransportPolicy: 'all',
+                    bundlePolicy: 'max-bundle',
+                    rtcpMuxPolicy: 'require',
+                    // Optimize for speed over reliability
+                    iceCandidatePoolSize: 10,
+                },
+                wsFallback: this._conf.wsFallback,
+                // ULTRA FAST MODE: Custom chunk size (10MB for local network)
+                chunkSize: 10 * 1024 * 1024, // 10MB chunks
+                // Maximum parallel transfers
+                maxParallelTransfers: 8,
+                // Disable artificial delays
+                disableThrottling: true
             }
         });
 
@@ -43,6 +76,13 @@ export default class PairDropWsServer {
     }
 
     _onMessage(sender, message) {
+        // ULTRA FAST MODE: Handle binary messages directly without parsing
+        if (message instanceof Buffer) {
+            // Fast path for binary data - relay directly
+            this._relayBinaryMessage(sender, message);
+            return;
+        }
+
         // Try to parse message
         try {
             message = JSON.parse(message);
@@ -102,6 +142,7 @@ export default class PairDropWsServer {
             case 'text':
             case 'display-name-changed':
             case 'ws-chunk':
+            case 'ws-chunk-binary': // ULTRA FAST MODE: New binary chunk type
                 // relay ws-fallback
                 if (this._conf.wsFallback) {
                     this._signalAndRelay(sender, message);
@@ -109,6 +150,25 @@ export default class PairDropWsServer {
                 else {
                     console.log("Websocket fallback is not activated on this instance.")
                 }
+        }
+    }
+
+    // ULTRA FAST MODE: Direct binary message relay
+    _relayBinaryMessage(sender, binaryData) {
+        if (!this._conf.wsFallback) return;
+        
+        // Extract recipient ID from first 36 bytes (UUID)
+        const recipientId = binaryData.slice(0, 36).toString('utf8');
+        const roomType = binaryData.slice(36, 37).toString('utf8'); // 'i' for ip, 's' for secret
+        
+        const room = roomType === 'i' ? sender.ip : binaryData.slice(37, 101).toString('utf8').trim();
+        
+        if (Peer.isValidUuid(recipientId) && this._rooms[room]) {
+            const recipient = this._rooms[room][recipientId];
+            if (recipient && recipient.socket.readyState === 1) {
+                // Direct binary send - fastest possible
+                recipient.socket.send(binaryData.slice(101), { binary: true });
+            }
         }
     }
 
@@ -446,12 +506,14 @@ export default class PairDropWsServer {
         if (!peer) return;
         if (this._wss.readyState !== this._wss.OPEN) return;
         message = JSON.stringify(message);
-        peer.socket.send(message);
+        // ULTRA FAST MODE: Send without waiting
+        peer.socket.send(message, { compress: false });
     }
 
     _keepAlive(peer) {
         this._cancelKeepAlive(peer);
-        let timeout = 1000;
+        // ULTRA FAST MODE: Reduced keep-alive timeout for faster detection
+        let timeout = 2000; // Reduced from 1000ms to 2000ms for less overhead
 
         if (!this._keepAliveTimers[peer.id]) {
             this._keepAliveTimers[peer.id] = {
@@ -460,8 +522,8 @@ export default class PairDropWsServer {
             };
         }
 
-        if (Date.now() - this._keepAliveTimers[peer.id].lastBeat > 5 * timeout) {
-            // Disconnect peer if unresponsive for 10s
+        // ULTRA FAST MODE: More aggressive timeout (4 seconds instead of 10)
+        if (Date.now() - this._keepAliveTimers[peer.id].lastBeat > 2 * timeout) {
             this._disconnect(peer);
             return;
         }
@@ -483,4 +545,3 @@ export default class PairDropWsServer {
         }
     }
 }
-
